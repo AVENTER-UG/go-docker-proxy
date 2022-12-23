@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 
 	"github.com/AVENTER-UG/util"
 )
@@ -14,4 +15,6 @@ func init() {
 	BlockAgent = os.Getenv("BLOCK_USERAGENT")
 	BlockURL = os.Getenv("BLOCK_URL")
 	LogLevel = util.Getenv("LOGLEVEL", "info")
+	CacheDir = util.Getenv("CACHEDIR", "./cache")
+	RetentionTime, _ = strconv.ParseFloat(util.Getenv("RETENTION", "24"), 64)
 }

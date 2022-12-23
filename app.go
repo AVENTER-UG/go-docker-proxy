@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -41,6 +42,12 @@ var LogLevel string
 
 // MinVersion is just the version of e app, its set dynamic during compiling
 var MinVersion string
+
+// CacheDir is the directory where we store the container blobs
+var CacheDir string
+
+// RetentionTime is the time after we delete to blobs
+var RetentionTime float64
 
 var srv http.Server
 var reAgent *regexp.Regexp
@@ -97,20 +104,20 @@ func modifyResponse() func(*http.Response) error {
 	return func(r *http.Response) error {
 
 		filename := path.Base(r.Request.URL.String())
-		directory := "./cache/" + path.Dir(strings.Trim(r.Request.URL.String(), TargetURL))
+		directory := CacheDir + "/" + path.Dir(strings.Trim(r.Request.URL.String(), TargetURL))
 
-		if directory == "./cache/." || strings.Contains(directory, "manifests") {
+		// do not cache manifest files
+		if directory == (CacheDir+"/.") || strings.Contains(directory, "manifests") {
 			return nil
 		}
 
 		if _, err := os.Stat(directory + "/" + filename); os.IsNotExist(err) {
-			logrus.WithField("func", "modifyRequest").Debug("Filename: " + filename)
-			logrus.WithField("func", "modifyRequest").Debug("Directory: " + directory)
-			logrus.WithField("func", "modifyRequest").Debug("Content Type: " + r.Header.Get("Content-Type"))
+			logrus.WithField("func", "modifyResponse").Debug("Write File: " + directory + "/" + filename)
 
 			os.MkdirAll(directory, os.ModePerm)
 
-			out, _ := os.Create(directory + "/" + filename)
+			out, _ := os.Create(filepath.Clean(directory + "/" + filename))
+			// #nosec G307
 			defer out.Close()
 
 			client := &http.Client{}
@@ -135,13 +142,13 @@ func modifyResponse() func(*http.Response) error {
 
 func modifyRequest(r *http.Request) {
 
-	filename := path.Base(r.URL.String())
-	directory := "./cache/" + path.Dir(strings.Trim(r.URL.String(), TargetURL))
+	filename := filepath.Clean(path.Base(r.URL.String()))
+	directory := filepath.Clean(CacheDir + "/" + path.Dir(strings.Trim(r.URL.String(), TargetURL)))
 
 	if fh, err := os.Stat(directory + "/" + filename); !errors.Is(err, os.ErrNotExist) {
 		dateDiff := fh.ModTime().Sub(time.Now())
 
-		if dateDiff.Hours() > 24.0 {
+		if dateDiff.Hours() < (RetentionTime * -1) {
 			logrus.WithField("func", "modifyRequest").Debug("Cleanup old file: " + directory + "/" + filename)
 			os.Remove(directory + "/" + filename)
 			return
@@ -171,7 +178,7 @@ func v2Directory(w http.ResponseWriter, r *http.Request) {
 }
 
 func fileServerLoop() {
-	fileServer := http.FileServer(http.Dir("./cache"))
+	fileServer := http.FileServer(http.Dir(CacheDir + ""))
 	http.HandleFunc("/v2", v2Directory)
 	http.Handle("/", fileServer)
 
