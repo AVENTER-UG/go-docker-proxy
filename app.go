@@ -2,8 +2,8 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -48,6 +48,12 @@ var CacheDir string
 
 // RetentionTime is the time after we delete to blobs
 var RetentionTime float64
+
+// SSLKey for the cache server
+var SSLKey string
+
+// SSLCrt for the cache server
+var SSLCrt string
 
 var srv http.Server
 var reAgent *regexp.Regexp
@@ -102,12 +108,11 @@ func (e *handle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func modifyResponse() func(*http.Response) error {
 	return func(r *http.Response) error {
-
 		filename := path.Base(r.Request.URL.String())
 		directory := CacheDir + "/" + path.Dir(strings.Trim(r.Request.URL.String(), TargetURL))
 
 		// do not cache manifest files
-		if directory == (CacheDir+"/.") || strings.Contains(directory, "manifests") {
+		if !strings.Contains(filename, "sha256") {
 			return nil
 		}
 
@@ -125,8 +130,9 @@ func modifyResponse() func(*http.Response) error {
 			client.Transport = &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			}
+
 			req, _ := http.NewRequest(r.Request.Method, r.Request.URL.String(), nil)
-			req.Header = r.Header
+			req.Header = r.Request.Header
 			res, _ := client.Do(req)
 
 			// Write the body to file
@@ -141,10 +147,12 @@ func modifyResponse() func(*http.Response) error {
 }
 
 func modifyRequest(r *http.Request) {
-
 	filename := filepath.Clean(path.Base(r.URL.String()))
 	directory := filepath.Clean(CacheDir + "/" + path.Dir(strings.Trim(r.URL.String(), TargetURL)))
 
+	if filename == "v2" {
+		return
+	}
 	if fh, err := os.Stat(directory + "/" + filename); !errors.Is(err, os.ErrNotExist) {
 		dateDiff := fh.ModTime().Sub(time.Now())
 
@@ -156,8 +164,10 @@ func modifyRequest(r *http.Request) {
 
 		if fh.Size() > 0 {
 			logrus.WithField("func", "modifyRequest").Debug("Read File: " + directory + "/" + filename)
-
-			r.URL.Host = "localhost:8080"
+			if SSLCrt != "" && SSLKey != "" {
+				r.URL.Scheme = "https"
+			}
+			r.URL.Host = "127.0.0.1:8080"
 		}
 	}
 }
@@ -172,20 +182,50 @@ func reverseProxyLoop() {
 	}
 }
 
-func v2Directory(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "application/json")
-	fmt.Fprintf(w, "{}")
-}
-
 func fileServerLoop() {
-	fileServer := http.FileServer(http.Dir(CacheDir + ""))
-	http.HandleFunc("/v2", v2Directory)
-	http.Handle("/", fileServer)
 
-	if err := http.ListenAndServe("127.0.0.1:8080", nil); err != nil {
+	var err error
+
+	server := &http.Server{
+		Addr:              ":8080",
+		ReadTimeout:       1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
+		TLSConfig: &tls.Config{
+			ClientAuth: tls.RequestClientCert,
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+
+	http.Handle("/", http.FileServer(http.Dir(CacheDir)))
+
+	if SSLCrt != "" && SSLKey != "" {
+		logrus.Debug("Enable TLS")
+		crt := decodeBase64Cert(SSLCrt)
+		key := decodeBase64Cert(SSLKey)
+		certs, err := tls.X509KeyPair(crt, key)
+		if err != nil {
+			logrus.Fatal("TLS Server Error: ", err.Error())
+		}
+		server.TLSConfig.Certificates = []tls.Certificate{certs}
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		err = server.ListenAndServe()
+	}
+
+	if err != nil {
 		logrus.WithField("func", "main.fileServerLoop").Error(err.Error())
 		fileServerLoop()
 	}
+}
+
+func decodeBase64Cert(pemCert string) []byte {
+	sslPem, err := base64.URLEncoding.DecodeString(pemCert)
+	if err != nil {
+		logrus.WithField("func", "main.decodeBase64Cert").Fatal("Error decoding SSL PEM from Base64: ", err.Error())
+	}
+	return sslPem
 }
 
 func main() {

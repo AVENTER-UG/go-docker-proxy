@@ -52,4 +52,4 @@ sboom:
 	syft dir:. > sbom.txt
 	syft dir:. -o json > sbom.json
 
-all: build seccheck sboom publish-latest
+all: build seccheck sboom 
