@@ -22,9 +22,13 @@ ENV LOG_LEVEL=info
 RUN apk add --no-cache ca-certificates
 RUN adduser -S -D -H -h /app appuser
 
-USER appuser
 
 COPY --from=builder /build/main /app/
+
+RUN mkdir -p /app/cache
+RUN chown -R appuser: /app
+
+USER appuser
 
 EXPOSE 10777
 
