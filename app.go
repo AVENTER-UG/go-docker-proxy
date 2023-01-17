@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 )
 
 // APIProxyPort is the Port where the service are listening
-var APIProxyPort string
+var APIProxyPort int
 
 // APIProxyBind is the IP where the service are listening
 var APIProxyBind string
@@ -55,7 +56,6 @@ var SSLKey string
 // SSLCrt for the cache server
 var SSLCrt string
 
-var srv http.Server
 var reAgent *regexp.Regexp
 var reURL *regexp.Regexp
 
@@ -112,7 +112,7 @@ func modifyResponse() func(*http.Response) error {
 		directory := CacheDir + "/" + path.Dir(strings.Trim(r.Request.URL.String(), TargetURL))
 
 		// do not cache manifest files
-		if !strings.Contains(filename, "sha256") {
+		if !strings.Contains(filename, "sha256") || strings.Contains(directory, strconv.Itoa(APIProxyPort+1)) {
 			return nil
 		}
 
@@ -167,27 +167,53 @@ func modifyRequest(r *http.Request) {
 			if SSLCrt != "" && SSLKey != "" {
 				r.URL.Scheme = "https"
 			}
-			r.URL.Host = "127.0.0.1:8080"
+			r.URL.Host = "127.0.0.1:" + strconv.Itoa(APIProxyPort+1)
 		}
 	}
 }
 
 func reverseProxyLoop() {
-	srv.Handler = &handle{reverseProxy: TargetURL}
-	srv.Addr = APIProxyBind + ":" + APIProxyPort
-	if err := srv.ListenAndServe(); err != nil {
-		logrus.WithField("func", "main.reverseProxyLoop").Error(err.Error())
-		srv.Close()
+	var err error
+
+	server := &http.Server{
+		Addr:              ":" + strconv.Itoa(APIProxyPort),
+		ReadTimeout:       1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		Handler:           &handle{reverseProxy: TargetURL},
+		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
+		TLSConfig: &tls.Config{
+			ClientAuth: tls.RequestClientCert,
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+
+	if SSLCrt != "" && SSLKey != "" {
+		logrus.WithField("func", "reverseProxyLoop").Debug("Enable TLS")
+		crt := decodeBase64Cert(SSLCrt)
+		key := decodeBase64Cert(SSLKey)
+		certs, err := tls.X509KeyPair(crt, key)
+		if err != nil {
+			logrus.WithField("func", "reverseProxyLoop").Fatal("TLS Server Error: ", err.Error())
+		}
+		server.TLSConfig.Certificates = []tls.Certificate{certs}
+		err = server.ListenAndServeTLS("", "")
+	} else {
+		err = server.ListenAndServe()
+	}
+
+	if err != nil {
+		logrus.WithField("func", "reverseProxyLoop").Error(err.Error())
+		server.Close()
 		reverseProxyLoop()
 	}
 }
 
 func fileServerLoop() {
-
 	var err error
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              ":" + strconv.Itoa(APIProxyPort+1),
 		ReadTimeout:       1 * time.Second,
 		WriteTimeout:      1 * time.Second,
 		IdleTimeout:       30 * time.Second,
@@ -201,12 +227,12 @@ func fileServerLoop() {
 	http.Handle("/", http.FileServer(http.Dir(CacheDir)))
 
 	if SSLCrt != "" && SSLKey != "" {
-		logrus.Debug("Enable TLS")
+		logrus.WithField("func", "fileServerLoop").Debug("Enable TLS")
 		crt := decodeBase64Cert(SSLCrt)
 		key := decodeBase64Cert(SSLKey)
 		certs, err := tls.X509KeyPair(crt, key)
 		if err != nil {
-			logrus.Fatal("TLS Server Error: ", err.Error())
+			logrus.WithField("func", "fileServerLoop").Fatal("TLS Server Error: ", err.Error())
 		}
 		server.TLSConfig.Certificates = []tls.Certificate{certs}
 		err = server.ListenAndServeTLS("", "")
@@ -215,7 +241,8 @@ func fileServerLoop() {
 	}
 
 	if err != nil {
-		logrus.WithField("func", "main.fileServerLoop").Error(err.Error())
+		logrus.WithField("func", "fileServerLoop").Error(err.Error())
+		server.Close()
 		fileServerLoop()
 	}
 }
@@ -223,7 +250,7 @@ func fileServerLoop() {
 func decodeBase64Cert(pemCert string) []byte {
 	sslPem, err := base64.URLEncoding.DecodeString(pemCert)
 	if err != nil {
-		logrus.WithField("func", "main.decodeBase64Cert").Fatal("Error decoding SSL PEM from Base64: ", err.Error())
+		logrus.WithField("func", "decodeBase64Cert").Fatal("Error decoding SSL PEM from Base64: ", err.Error())
 	}
 	return sslPem
 }
