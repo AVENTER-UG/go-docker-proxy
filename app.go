@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AVENTER-UG/util"
+	"github.com/AVENTER-UG/util/util"
 	"github.com/sirupsen/logrus"
 )
 
@@ -112,14 +112,17 @@ func modifyResponse() func(*http.Response) error {
 		directory := CacheDir + "/" + path.Dir(strings.Trim(r.Request.URL.String(), TargetURL))
 
 		// do not cache manifest files
-		if !strings.Contains(filename, "sha256") || strings.Contains(directory, strconv.Itoa(APIProxyPort+1)) {
+		if !strings.Contains(directory, "blobs") || strings.Contains(directory, strconv.Itoa(APIProxyPort+1)) {
 			return nil
 		}
 
 		if _, err := os.Stat(directory + "/" + filename); os.IsNotExist(err) {
 			logrus.WithField("func", "modifyResponse").Debug("Write File: " + directory + "/" + filename)
 
-			os.MkdirAll(directory, os.ModePerm)
+			err = os.MkdirAll(directory, os.ModePerm)
+			if err != nil {
+				logrus.WithField("func", "modifyRequest").Error(err.Error())
+			}
 
 			out, _ := os.Create(filepath.Clean(directory + "/" + filename))
 			// #nosec G307
@@ -131,11 +134,11 @@ func modifyResponse() func(*http.Response) error {
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			}
 
-			req, _ := http.NewRequest(r.Request.Method, r.Request.URL.String(), nil)
+			req, _ := http.NewRequest(r.Request.Method, r.Request.URL.String(), http.NoBody)
 			req.Header = r.Request.Header
 			res, _ := client.Do(req)
 
-			// Write the body to file
+			// Write the body to fildocker pull dockregproxy.marathon.slave.mesos:10666/aggrviews/attr-aggviews-facebook:teste
 			_, err := io.Copy(out, res.Body)
 
 			if err != nil {
@@ -154,7 +157,7 @@ func modifyRequest(r *http.Request) {
 		return
 	}
 	if fh, err := os.Stat(directory + "/" + filename); !errors.Is(err, os.ErrNotExist) {
-		dateDiff := fh.ModTime().Sub(time.Now())
+		dateDiff := time.Until(time.Now())
 
 		if dateDiff.Hours() < (RetentionTime * -1) {
 			logrus.WithField("func", "modifyRequest").Debug("Cleanup old file: " + directory + "/" + filename)
@@ -192,7 +195,8 @@ func reverseProxyLoop() {
 		logrus.WithField("func", "reverseProxyLoop").Debug("Enable TLS")
 		crt := decodeBase64Cert(SSLCrt)
 		key := decodeBase64Cert(SSLKey)
-		certs, err := tls.X509KeyPair(crt, key)
+		var certs tls.Certificate
+		certs, err = tls.X509KeyPair(crt, key)
 		if err != nil {
 			logrus.WithField("func", "reverseProxyLoop").Fatal("TLS Server Error: ", err.Error())
 		}
@@ -230,7 +234,8 @@ func fileServerLoop() {
 		logrus.WithField("func", "fileServerLoop").Debug("Enable TLS")
 		crt := decodeBase64Cert(SSLCrt)
 		key := decodeBase64Cert(SSLKey)
-		certs, err := tls.X509KeyPair(crt, key)
+		var certs tls.Certificate
+		certs, err = tls.X509KeyPair(crt, key)
 		if err != nil {
 			logrus.WithField("func", "fileServerLoop").Fatal("TLS Server Error: ", err.Error())
 		}

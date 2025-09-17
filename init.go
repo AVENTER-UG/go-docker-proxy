@@ -4,7 +4,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/AVENTER-UG/util"
+	"github.com/AVENTER-UG/util/util"
 )
 
 func init() {

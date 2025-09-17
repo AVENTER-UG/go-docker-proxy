@@ -1,4 +1,4 @@
-FROM golang:alpine as builder
+FROM golang:alpine AS builder
 
 WORKDIR /build
 
@@ -12,6 +12,10 @@ RUN go mod vendor; CGO_ENABLED=0 GOOS=linux go build -mod=vendor -a -installsuff
 
 FROM alpine
 LABEL maintainer="Andreas Peters <support@aventer.biz>"
+LABEL org.opencontainers.image.title="go-docker-proxy"
+LABEL org.opencontainers.image.description="Docker Proxy"
+LABEL org.opencontainers.image.vendor="AVENTER UG (haftungsbeschränkt)"
+LABEL org.opencontainers.image.source="https://github.com/AVENTER-UG/"
 
 ENV API_PROXYPORT=10777 
 ENV API_PROXYBIND=0.0.0.0
